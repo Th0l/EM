@@ -1,0 +1,464 @@
+// AllocatorImplementation TLA+ -> Electrum
+
+abstract sig Type {}
+one sig request, allocate, return extends Type {} 
+
+var sig Message {
+	var type : one Type,
+	var clt : one Client,
+	var rsrc : set Resource
+}
+
+var sig Network in Message {} //set of messages in transit
+
+sig Client {
+	var requests : set Resource, //pending requests per client
+	var holding : set Resource //resources currently held by the client
+}
+
+sig Resource {}
+// Resources are available iff they have not been allocated.
+var sig Available in Resource {}
+
+var sig Alloc { //set of resources allocated to given process
+	var prcAlloc : one Client, 
+	var rsrcAlloc : set Resource
+}
+
+var sig Unsat { //set of all outstanding requests per process
+	var prcUnsat : one Client, 
+	var rsrcUnsat : set Resource
+}
+
+one sig Schedule { 
+	var sched: seq Client 
+}
+
+// Initially, no resources have been requested or allocated.
+fact init {
+	no sched
+	
+	no prcAlloc
+	no rsrcAlloc
+	no prcUnsat
+	no rsrcUnsat
+
+	no requests
+	no holding
+	
+	no Message
+
+	Resource in Available
+}
+
+
+/* A client c may request a set of resources provided that it has      *)
+(* neither pending requests nor holds any resources. The request is    *)
+(* put into the network for delivery to the allocator.                 */
+pred Request( c : Client , r : Resource){
+	some r
+	
+	no ((clt.c) & (type.request))
+	no c.requests
+	no c.holding
+
+	c.requests' = c.requests + r
+	c.holding' = c.holding
+	
+	some m : Message' {
+		m not in Message
+	
+		type' = type + m->request // Adicionar a mensagem M de todas as relações
+		clt' = clt + m->c    	  // ...
+		rsrc' = rsrc + m->r
+
+		//Message' = Message + m
+		Network' = Network + m
+	}
+
+	sched' = sched
+	all cc : (Client - c) | cc.requests' = cc.requests and cc.holding' = cc.holding
+
+	prcAlloc' = prcAlloc
+	rsrcAlloc' = rsrcAlloc
+	prcUnsat' = prcUnsat
+	rsrcUnsat' = rsrcUnsat
+
+	Available' = Available
+	Resource' = Resource
+}
+
+/* Reception of a request message from a client by the allocator.      *)
+(* The allocator updates its data structures and inserts the client    *)
+(* into the pool of clients with pending requests.                     */
+pred RReq(m : Message){
+	m in Network
+	m.type = request
+	no (Alloc.prcAlloc & m.clt) // Ao fazer parse de um Request, não pode ter instância no Alloc (dar delete depois)
+
+	some u : Unsat'{
+		u not in Unsat
+		
+		prcUnsat' = prcUnsat + u->m.clt
+		rsrcUnsat' = rsrcUnsat + u->m.rsrc
+
+		Unsat' = Unsat + u
+	}
+
+	type' = type - m->m.type // Remover a mensagem M de todas as relações
+	clt' = clt - m->m.clt    // ...
+	rsrc' = rsrc - m->m.rsrc // ...
+	Network' = Network - m   // ...
+	Message' = Message - m
+
+	sched' = sched
+	prcAlloc' = prcAlloc
+	rsrcAlloc' = rsrcAlloc
+	Alloc' = Alloc
+
+	Available' = Available
+	Resource' = Resource
+
+	requests' = requests
+	holding' = holding
+}
+
+/* Allocation of a set of available resources to a client that has     *)
+(* requested them (the entire request does not have to be filled).     *)
+(* The process must appear in the schedule, and no process earlier in  *)
+(* the schedule may have requested one of the resources.               */
+pred Allocate(c : Client, r : Resource){
+	some r
+	r in Available
+	some u : Unsat {
+		one u
+		c in u.prcUnsat
+		r in u.rsrcUnsat // Verificar que r faz parte dos recursos pedidos pelo cliente c
+		some i : Schedule.sched.idxOf[c]{
+			let subs = Schedule.sched.subseq[0,sub[i,1]]{ // Obtem todos os Clientes que estavam antes dele na fila de espera
+				all cl : subs.elems { 			           // Para cada um dos Clientes	
+					some uu : Unsat {
+						one uu
+						cl in uu.prcUnsat
+						no r & uu.rsrcUnsat // Vai verificar que não existem resources requsitados anteriormente comuns
+					}					   							
+				}             		 						
+			}
+			
+			no prcAlloc.c => {
+				some a : Alloc' {
+					a not in Alloc
+
+					prcAlloc' = prcAlloc + a->c
+					rsrcAlloc' = rsrcAlloc + a->r
+
+					Alloc' = Alloc + a
+				}
+			}
+	
+			some prcAlloc.c => { //Para não estar a duplicar instâncias de Alloc, se já existir uma para o cliente, os recursos dentro dela vão ser atualizados
+				some a : Alloc {
+					a.prcAlloc = c
+
+					prcAlloc' = prcAlloc
+					a.rsrcAlloc' = a.rsrcAlloc + r
+					all aa : (Alloc - a) | aa.rsrcAlloc' = aa.rsrcAlloc
+				}
+			}
+			
+			no ( u.rsrcUnsat - r ) => {
+				Schedule.sched' = Schedule.sched.delete[i]
+				prcUnsat' = prcUnsat - u->u.prcUnsat
+				rsrcUnsat' = rsrcUnsat - u->u.rsrcUnsat
+			}
+
+			some ( u.rsrcUnsat - r ) => {
+				Schedule.sched' = Schedule.sched
+				prcUnsat' = prcUnsat
+				u.rsrcUnsat' = u.rsrcUnsat - r
+				all un : (Unsat - u) | un.rsrcUnsat' = un.rsrcUnsat
+			}
+		}
+	}
+
+	Available' = Available - r
+	
+	some m : Message'{
+		m not in Message
+	
+		type' = type + m->allocate
+		clt' = clt + m->c
+		rsrc' = rsrc + m->r
+
+		Network' = Network + m	
+		//Message' = Message + m	
+	}
+
+	requests' = requests
+	holding' = holding
+	
+}
+
+// Reception of an allocation message by a client.
+pred RAlloc(m : Message){
+	m in Network
+	m.type = allocate
+
+	some c : Client {
+		m.clt = c
+
+		c.requests' = c.requests - m.rsrc
+		c.holding' = c.holding + m.rsrc
+
+		type' = type - m->m.type // Remover a mensagem M de todas as relações
+		clt' = clt - m->m.clt    // ...
+		rsrc' = rsrc - m->m.rsrc // ...
+		Network' = Network - m   // ...
+		Message' = Message - m
+
+		all cc : ( Client - c ) | cc.requests' = cc.requests and cc.holding' = cc.holding	
+	}
+	
+	sched' = sched
+
+	prcAlloc' = prcAlloc
+	rsrcAlloc' = rsrcAlloc 
+
+	prcUnsat' = prcUnsat
+	rsrcUnsat' = rsrcUnsat
+
+	Available' = Available
+	Resource' = Resource
+}
+
+/* Client c returns a set of resources that it holds. It may do so     *)
+(* even before its full request has been honored.                      */
+pred Return(c : Client, r : Resource){
+	some r
+	r in c.holding
+
+	c.holding' = c.holding - r
+	all cc : (Client - c) | cc.holding' = cc.holding
+	requests' = requests
+
+	some m : Message'{
+		m not in Message
+	
+		type' = type + m->return
+		clt' = clt + m->c
+		rsrc' = rsrc + m->r
+
+		Network' = Network + m	
+		//Message' = Message + m	
+	}
+
+	sched' = sched
+
+	prcAlloc' = prcAlloc
+	rsrcAlloc' = rsrcAlloc
+	prcUnsat' = prcUnsat
+	rsrcUnsat' = rsrcUnsat
+
+	Available' = Available
+	Resource' = Resource
+}
+
+/* Reception of a return message by the allocator.                     */
+pred RRet(m : Message){
+	m in Network
+	m.type = return
+	
+	some a : Alloc {
+		a.prcAlloc = m.clt
+		
+		no (a.rsrcAlloc - m.rsrc) => {
+			prcAlloc' = prcAlloc - a->a.prcAlloc
+			rsrcAlloc' = rsrcAlloc - a->a.rsrcAlloc
+		}
+
+		some (a.rsrcAlloc - m.rsrc) => {
+			prcAlloc' = prcAlloc
+			a.rsrcAlloc' = a.rsrcAlloc - m.rsrc
+			all aa : (Alloc - a) | aa.rsrcAlloc' = aa.rsrcAlloc
+		}
+
+		Available' = Available + m.rsrc
+	}
+
+	type' = type - m->m.type // Remover a mensagem M de todas as relações
+	clt' = clt - m->m.clt    // ...
+	rsrc' = rsrc - m->m.rsrc // ...
+	Network' = Network - m   // ...
+	Message' = Message - m
+
+	sched' = sched
+	prcUnsat' = prcUnsat
+	rsrcUnsat' = rsrcUnsat
+	
+	requests' = requests
+	holding' = holding
+	//Resource' = Resource
+}
+
+/* The allocator extends its schedule by adding the processes from     *)
+(* the pool (that have outstanding requests but that have not yet been *)
+(* scheduled, in some unspecified order.                               */
+pred Scheduling() {
+	some cl : Unsat.prcUnsat{
+		no (cl & Schedule.sched.elems)
+		Schedule.sched' = Schedule.sched.add[cl]
+	}
+	
+	prcAlloc' = prcAlloc
+	rsrcAlloc' = rsrcAlloc
+	prcUnsat' = prcUnsat
+	rsrcUnsat' = rsrcUnsat
+	Unsat' = Unsat
+	Alloc' = Alloc
+	
+	Available' = Available
+	Resource' = Resource
+
+	Message' = Message
+	Network' = Network
+	type' = type
+	clt' = clt
+	rsrc' = rsrc
+
+	requests' = requests
+	holding' = holding
+}
+
+//When nothing happens
+pred nop {
+	Available' = Available
+	Resource' = Resource
+	sched' = sched
+	
+	prcAlloc' = prcAlloc
+	rsrcAlloc' = rsrcAlloc
+	prcUnsat' = prcUnsat
+	rsrcUnsat' = rsrcUnsat
+
+	Message' = Message
+	Network' = Network
+	type' = type
+	clt' = clt
+	rsrc' = rsrc
+
+	all c:Client | c.requests' = c.requests and c.holding' = c.holding
+}
+
+//Transitions
+fact next{
+	always(
+		some S: set Resource{
+			( nop 
+				or (some c : Client | Request[c,S] or Allocate[c,S] or Return[c,S]) 
+				or (some m : Message | RReq[m] or RAlloc[m] or RRet[m]) 
+				or Scheduling 
+			)
+		}
+	)
+}
+
+// requests sent by c but not yet received
+fun RequestsInTransit(c : Client) : Resource { ((clt.c) & (type.request)).rsrc }
+
+// allocations sent to c but not yet received
+fun AllocsInTransit(c : Client) : Resource { ((clt.c) & (type.allocate)).rsrc }
+
+//return messages sent by c but not yet received
+fun ReturnsInTransit(c : Client) : Resource { ((clt.c) & (type.return)).rsrc } 
+
+// clients that do not appear in the schedule
+let UnscheduledClients = Client - Schedule.sched.elems 
+
+//resources that will be available when client i has to be satisfied
+fun PrevResources[i : Int]: Resource {
+	Available + ((prcUnsat.(Schedule.sched.subseq[0,sub[i,1]].elems)).rsrcUnsat) + ((prcAlloc.(Schedule.sched.subseq[0,sub[i,1]].elems)).rsrcAlloc) + ((prcAlloc.(UnscheduledClients)).rsrcAlloc)
+}
+
+//a lower-level invariant
+assert Invariant{
+	// all clients in the schedule have outstanding requests
+	always( all c1:Client | some Schedule.sched.indsOf[c1] implies some (prcUnsat.c1).rsrcUnsat )
+	// all clients that need to be scheduled have outstanding requests
+	always( all c2:Client | c2 in Unsat.prcUnsat implies some (prcUnsat.c2).rsrcUnsat )
+	// clients never hold a resource requested by a process earlier in the schedule
+	always( 
+		all i : Schedule.sched.inds {
+			all j : Schedule.sched.subseq[0,sub[i,1]].inds {
+				no ((prcAlloc.(Schedule.sched[i])).rsrcAlloc & (prcUnsat.(Schedule.sched[j])).rsrcUnsat)
+			}
+		}
+	)	 	
+	// the allocator can satisfy the requests of any scheduled client
+    //   assuming that the clients scheduled earlier release their resources 
+	always( 
+		all ii : Schedule.sched.inds {
+			some ((prcUnsat.(Schedule.sched[ii])).rsrcUnsat & PrevResources[ii])
+		}
+	)
+	// interplay between allocator and client variables  
+	always(
+		all c : Client{
+			lone ((clt.c) & (type.request)) //O RequestsInTransit do TLA não faz sentido estar aqui, pois está a dizer q só pode pedir um unico recurso de cada vez
+			c.requests = (prcUnsat.c).rsrcUnsat + RequestsInTransit[c] + AllocsInTransit[c]
+			(prcAlloc.c).rsrcAlloc = c.holding + AllocsInTransit[c] + ReturnsInTransit[c]
+		}
+	)
+}
+
+/* correctness properties in terms of clients' variables */
+
+//No two Clients can be using the same Resource at any given time
+assert ResourceMutex{
+	always(
+		all disj c1,c2 : Client | no (c1.holding & c2.holding)
+	)
+}
+
+//All Clients will always eventually return the Resource they requested
+assert ClientsWillReturn{
+	always(
+		all c : Client | no c.requests implies eventually no c.holding
+	)
+}
+
+//All Clients will always eventually get access to the resource they requested
+assert ClientsWillObtain{
+	always(
+		all c:Client, r:Resource | some c.requests :> r implies eventually some c.holding :> r
+	)
+}
+
+//All Clients will always eventually have their Requests satisfied
+assert InfOftenSatisfied{
+	all c:Client | always eventually no c.requests
+}
+
+/***********************************************************************)
+(* Liveness assumptions:                                               *)
+(* - Clients must return resources if their request has been satisfied.*)
+(* - The allocator must eventually allocate resources when possible.   *)
+(* - The allocator must schedule the processes in the pool.            *)
+(* - Messages must eventually be received.                             *)
+(***********************************************************************/
+fact Liveness {
+	// WEAK FAIRNESS
+	all c : Client | eventually always some c.holding  implies always eventually ( no c.requests and no c.holding )
+
+	eventually always( all c:Client { some S : Resource | always eventually S in c.holding })
+
+	eventually always( some (Unsat.prcUnsat - Schedule.sched.elems) implies always eventually Scheduling[] )	
+
+	eventually always( some Message implies always eventually no Message)
+}
+run AllocatorImplementation {} for 4 but exactly 2 Resource, exactly 2 Client, 30 steps
+
+check ResourceMutex for 3
+check ClientsWillReturn for 3
+check ClientsWillObtain for 3
+check InfOftenSatisfied for 3
+check Invariant for 3

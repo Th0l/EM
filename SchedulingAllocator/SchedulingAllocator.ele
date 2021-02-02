@@ -1,0 +1,218 @@
+// SchedulingAllocator TLA+ -> Electrum
+
+//Alloy has "seq" structure, that allows use of Sequences, kinda of like an Array! Use it!
+
+sig Client {
+	var Unsat : set Resource, //Set of all outstanding requests per process
+	var Alloc : set Resource //Set of all resources allocated to a process
+}
+
+//Clients with pending requests that have not yet been scheduled 
+var sig toSchedule in Client {}
+
+sig Resource {}
+
+// Resources are available iff they have not been allocated.
+var sig Available in Resource {}
+
+one sig Schedule { 
+	var sched: seq Client 
+}
+
+/** Não se conseguiu fazer a resolução desta função
+	Ao invês disto, no scheduling adiciona-se elementos 1 a 1
+fun PermSeqs(){
+} */
+
+// Initially, no resources have been requested or allocated.
+fact init {
+	Resource in Available // Todos os recursos estão disponiveis
+	no toSchedule // Nenhum cliente ja fez requests
+
+	no sched
+	no Unsat
+	no Alloc
+}
+
+/* A client c may request a set of resources provided that all of its  *)
+(* previous requests have been satisfied and that it doesn't hold any  *)
+(* resources. The client is added to the pool of clients with          *)
+(* outstanding requests.                                               */
+pred Request(c : Client, s : Resource){
+	
+	no c.Unsat
+	no c.Alloc
+
+	some s
+
+	c.Unsat' = c.Unsat + s
+	
+	all cc : (Client - c) | cc.Unsat' = cc.Unsat
+
+	toSchedule' = toSchedule + c
+	Alloc' = Alloc
+	Available' = Available
+	sched' = sched
+}
+
+/* Allocation of a set of available resources to a client that has     *)
+(* requested them (the entire request does not have to be filled).     *)
+(* The process must appear in the schedule, and no process earlier in  *)
+(* the schedule may have requested one of the resources.               */
+pred Allocate(c : Client, request : Resource){
+	
+	some request
+	request in Available
+	request in c.Unsat
+
+	some i : Schedule.sched.idxOf[c]{ // Obtem o indice i de onde Client c está no Schedule
+		let subs = Schedule.sched.subseq[0,sub[i,1]]{ // Obtem todos os Clientes que estavam antes dele na fila de espera
+			all cl : subs.elems { 			          // Para cada um dos Clientes
+				no (request & cl.Unsat)	              // Vai verificar que não existem resources requstados anteriormente comuns		 						
+			}
+		} 		
+		c.Unsat' = c.Unsat - request
+		c.Alloc' = c.Alloc + request
+		
+		no c.Unsat' => Schedule.sched' = Schedule.sched.delete[i]
+		some c.Unsat' => Schedule.sched' = Schedule.sched
+					
+		Available' = Available - request
+	}
+	
+	all cc : (Client - c) | cc.Unsat' = cc.Unsat and cc.Alloc' = cc.Alloc
+	toSchedule' = toSchedule
+}
+
+/* Client c returns a set of resources that it holds. It may do so     *)
+(* even before its full request has been honored.                      */
+pred Return(c : Client, s : Resource) {
+	
+	some s
+	
+	s in c.Alloc
+
+	c.Alloc' = c.Alloc - s
+	
+	all cc : (Client - c) | cc.Alloc' = cc.Alloc
+
+	Available' = Available + s
+	Unsat' = Unsat
+	toSchedule' = toSchedule
+	sched' = sched
+}
+
+/* The allocator extends its schedule by adding the processes from     *)
+(* the set of clients to be scheduled, in some unspecified order.      */
+pred Scheduling() {
+	some ins : toSchedule{
+		Schedule.sched' = Schedule.sched.add[ins]
+		toSchedule' = toSchedule - ins
+	}
+	
+	Unsat' = Unsat
+	Alloc' = Alloc
+	Available' = Available
+	Resource' = Resource
+}
+
+//When nothing happens
+pred nop {
+	Available' = Available
+	Resource' = Resource
+	toSchedule' = toSchedule
+	sched' = sched
+	all c:Client | c.Unsat' = c.Unsat and c.Alloc' = c.Alloc
+}
+
+//Transitions
+fact next {
+	always(
+		some S: set Resource{
+			(nop or (some c : Client | Allocate[c,S] or Request[c,S] or Return[c,S] or Scheduling[] ))
+		}
+	)
+}
+
+//No two Clients can be using the same Resource at any given time
+assert ResourceMutex{
+	always(
+		all disj c1,c2 : Client | no (c1.Alloc & c2.Alloc)
+	)
+}
+
+// clients that do not appear in the schedule
+let UnscheduledClients = Client - Schedule.sched.elems 
+
+//resources that will be available when client i has to be satisfied
+fun PrevResources[i : Int]: Resource {
+	Available + (Schedule.sched.subseq[0,sub[i,1]].elems.Unsat) + (Schedule.sched.subseq[0,sub[i,1]].elems.Alloc) + (UnscheduledClients.Alloc)
+}
+
+// a lower-level invariant
+assert AllocatorInvariant{
+	// all clients in the schedule have outstanding requests
+	always( all c1:Client | some Schedule.sched.indsOf[c1] implies some c1.Unsat )
+	// all clients that need to be scheduled have outstanding requests
+	always( all c2:Client | c2 in toSchedule implies some c2.Unsat )
+	// clients never hold a resource requested by a process earlier in the schedule
+	always( 
+		all i : Schedule.sched.inds {
+			all j : Schedule.sched.subseq[0,sub[i,1]].inds {
+				no (Schedule.sched[i].Alloc & Schedule.sched[j].Unsat)
+			}
+		}
+	)	 	
+	// the allocator can satisfy the requests of any scheduled client
+    //   assuming that the clients scheduled earlier release their resources 
+	always( 
+		all ii : Schedule.sched.inds {
+			some (Schedule.sched[ii].Unsat & PrevResources[ii])
+		}
+	) 
+}
+
+//All Clients will always eventually return the Resource they requested
+assert ClientsWillReturn{
+	always(
+		all c : Client | no c.Unsat implies eventually no c.Alloc
+	)
+}
+
+//All Clients will always eventually get access to the resource they requested
+assert ClientsWillObtain{
+	always(
+		all c:Client, r:Resource | some c.Unsat :> r implies eventually some c.Alloc :> r
+	)
+}
+
+//All Clients will always eventually have their Requests satisfied
+assert InfOftenSatisfied{
+	all c:Client | always eventually no c.Unsat
+}
+
+/***********************************************************************)
+(* Liveness assumptions:                                               *)
+(* - Clients must return resources if their request has been satisfied.*)
+(* - The allocator must eventually allocate resources when possible.   *)
+(* - The allocator must schedule the processes in the pool.            *)
+(***********************************************************************/
+fact Liveness {
+	// WEAK FAIRNESS
+	all c : Client | eventually always some c.Alloc  implies always eventually ( no c.Unsat and no c.Alloc )
+	
+	eventually always( all c:Client { some S : Resource | always eventually S in c.Alloc })	
+
+	eventually always( some toSchedule implies always eventually Scheduling[] )
+
+	//STRONG FAIRNESS
+	//always eventually( all c:Client | some c.Unsat implies always eventually no c.Unsat )
+}
+
+run SchedullingAllocator {} for 5 but exactly 2 Resource, exactly 3 Client, 20 steps
+
+check ResourceMutex for 4
+check ClientsWillReturn for 4
+check ClientsWillObtain for 4
+check InfOftenSatisfied for 4
+check AllocatorInvariant for 4

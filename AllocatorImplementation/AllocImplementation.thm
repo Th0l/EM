@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<alloy>
+
+<view nodetheme="Martha" edgetheme="Neon">
+
+<defaultnode/>
+
+<defaultedge/>
+
+<node>
+   <type name="Int"/>
+   <type name="String"/>
+   <type name="Type"/>
+   <type name="univ"/>
+   <type name="seq/Int"/>
+</node>
+
+<node color="Red">
+   <type name="Resource"/>
+</node>
+
+<node shape="Hexagon" color="White">
+   <type name="Schedule"/>
+</node>
+
+<node showlabel="no" showinattr="no" style="Solid" color="Green">
+   <set name="this/Available" type="Resource"/>
+</node>
+
+<node style="Bold" color="Green">
+   <type name="Unsat"/>
+</node>
+
+<node style="Bold" color="Red">
+   <type name="Alloc"/>
+</node>
+
+<node style="Bold" shape="Trapezoid" color="Blue">
+   <type name="request"/>
+</node>
+
+<node style="Bold" shape="Trapezoid" color="Gray">
+   <type name="return"/>
+</node>
+
+<node style="Bold" shape="Trapezoid" color="Red">
+   <type name="allocate"/>
+</node>
+
+<node style="Solid" shape="Ellipse" color="Black">
+   <type name="Client"/>
+</node>
+
+<node visible="no" style="Bold" color="Gray">
+   <type name="Message"/>
+</node>
+
+<node visible="yes" showlabel="no">
+   <set name="this/Network" type="Message"/>
+</node>
+
+<edge color="Red" style="Bold">
+   <relation name="sched"> <type name="Schedule"/> <type name="seq/Int"/> <type name="Client"/> </relation>
+</edge>
+
+</view>
+
+</alloy>

@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<alloy>
+
+<view nodetheme="Martha" edgetheme="Martha">
+
+<defaultnode/>
+
+<defaultedge/>
+
+<node>
+   <type name="Int"/>
+   <type name="String"/>
+   <type name="univ"/>
+   <type name="seq/Int"/>
+</node>
+
+<node color="Gray">
+   <type name="Resource"/>
+</node>
+
+<node showlabel="no" showinattr="no" style="Solid" color="Green">
+   <set name="this/Available" type="Resource"/>
+</node>
+
+<node style="Solid" shape="Ellipse" color="Blue">
+   <type name="Client"/>
+</node>
+
+<edge color="Black" style="inherit">
+   <relation name="Unsat"> <type name="Client"/> <type name="Resource"/> </relation>
+</edge>
+
+<edge color="Red" style="inherit">
+   <relation name="Alloc"> <type name="Client"/> <type name="Resource"/> </relation>
+</edge>
+
+</view>
+
+</alloy>

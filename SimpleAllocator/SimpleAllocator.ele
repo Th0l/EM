@@ -1,0 +1,122 @@
+// SimpleAllocator TLA+ --> Electrum
+
+sig Client {
+	var Unsat : set Resource, //Set of all outstanding requests per process
+	var Alloc : set Resource //Set of all resources allocated to a process
+}
+
+sig Resource {}
+
+// Resources are available iff they have not been allocated.
+var sig Available in Resource {}
+
+// Initially, no resources have been requested or allocated.
+fact init {
+	Resource in Available
+	no Unsat
+	no Alloc
+} 
+
+// A client c may request a set of resources provided that all of its
+// previous requests have been satisfied and that it doesn't hold any
+// resources.
+pred Request(c : Client, s : Resource){
+	no c.Unsat
+	no c.Alloc
+	
+	some s 
+	
+	c.Unsat' = c.Unsat + s
+	
+	all cc : (Client - c) | cc.Unsat' = cc.Unsat
+
+	Alloc' = Alloc
+	Available' = Available
+}
+
+
+// Allocation of a set of available resources to a client that 
+// requested them (the entire request does not have to be filled).    
+pred Allocate(c : Client, s : Resource){
+	
+	s in Available
+	s in c.Unsat // Os resources tiveram de ter sido pedidos pelo cliente
+
+	c.Unsat' = c.Unsat - s
+	c.Alloc' = c.Alloc + s
+	
+	all cc : (Client - c) | cc.Unsat' = cc.Unsat and cc.Alloc' = cc.Alloc
+
+	Available' = Available - s
+}
+
+// Client c returns a set of resources that it holds. It may do so    
+// even before its full request has been honored.                     
+pred Return(c : Client, s : Resource){
+	
+	s in c.Alloc
+
+	c.Alloc' = c.Alloc - s
+	
+	all cc : (Client - c) | cc.Alloc' = cc.Alloc
+
+	Available' = Available + s
+	Unsat' = Unsat
+}
+
+//When nothing happens
+pred nop {
+	Available' = Available
+	Resource' = Resource
+	all c:Client | c.Unsat' = c.Unsat and c.Alloc' = c.Alloc
+}
+
+//Transitions
+fact next{
+	always(
+		some S: set Resource{
+			(nop or (some c : Client | Allocate[c,S] or Request[c,S] or Return[c,S] ))
+		}
+	)
+}
+
+//No two Clients can be using the same Resource at any given time
+assert ResourceMutex{
+	always(
+		all disj c1,c2 : Client | no (c1.Alloc & c2.Alloc)
+	)
+}
+
+//All Clients will always eventually return the Resource they requested
+assert ClientsWillReturn{
+	always(
+		all c : Client | no c.Unsat implies eventually no c.Alloc
+	)
+}
+
+//All Clients will always eventually get access to the resource they requested
+assert ClientsWillObtain{
+	always(
+		all c:Client, r:Resource | some c.Unsat :> r implies eventually some c.Alloc :> r
+	)
+}
+
+//All Clients will always eventually have their Requests satisfied
+assert InfOftenSatisfied{
+	all c:Client | always eventually no c.Unsat
+}
+
+check ResourceMutex for 4
+check ClientsWillReturn for 4
+check ClientsWillObtain for 4
+check InfOftenSatisfied for 4
+
+fact Liveness {
+	// WEAK FAIRNESS
+	all c : Client | eventually always some c.Alloc  implies always eventually ( no c.Unsat and no c.Alloc )
+
+	//STRONG FAIRNESS
+	always eventually( all c:Client { some S : Resource | always eventually S in c.Alloc })	
+}
+
+run SimpleAlloc {} for 5 but exactly 2 Resource, exactly 3 Client
